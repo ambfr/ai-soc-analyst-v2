@@ -9,7 +9,6 @@ import (
 
 var ipRegex = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
 
-// IPResult now includes ThreatIntel — populated only for external IPs.
 type IPResult struct {
 	IP         string           `json:"ip"`
 	Type       string           `json:"type"`
@@ -17,6 +16,7 @@ type IPResult struct {
 	Flags      []string         `json:"flags"`
 	Techniques []MitreTechnique `json:"mitre_techniques"`
 	Intel      ThreatIntel      `json:"threat_intel"`
+	LLM        LLMExplanation   `json:"llm_explanation"`
 }
 
 type AnalyzeResult struct {
@@ -96,15 +96,17 @@ func ParseLog(content string) []IPResult {
 		techniques := MapFlagsToTechniques(flags)
 		ipType := classifyIP(ip)
 
-		// NEW in Phase 4: only call AbuseIPDB for external IPs. Checking
-		// internal/private IPs against a public abuse database makes no
-		// sense and would just waste API quota.
 		var intel ThreatIntel
 		if ipType == "external" {
 			intel = CheckIP(ip)
 		} else {
 			intel = ThreatIntel{Checked: false}
 		}
+
+		// NEW in Phase 5: generate an LLM explanation, but only for IPs
+		// that actually have flags — no point spending an API call on
+		// IPs with nothing suspicious detected.
+		llmResult := ExplainIP(ip, ipType, flags, techniques, intel)
 
 		results = append(results, IPResult{
 			IP:         ip,
@@ -113,6 +115,7 @@ func ParseLog(content string) []IPResult {
 			Flags:      flags,
 			Techniques: techniques,
 			Intel:      intel,
+			LLM:        llmResult,
 		})
 	}
 

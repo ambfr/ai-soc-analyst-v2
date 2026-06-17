@@ -17,6 +17,7 @@ type IPResult struct {
 	Techniques []MitreTechnique `json:"mitre_techniques"`
 	Intel      ThreatIntel      `json:"threat_intel"`
 	LLM        LLMExplanation   `json:"llm_explanation"`
+	Severity   Severity         `json:"severity"`
 }
 
 type AnalyzeResult struct {
@@ -103,10 +104,10 @@ func ParseLog(content string) []IPResult {
 			intel = ThreatIntel{Checked: false}
 		}
 
-		// NEW in Phase 5: generate an LLM explanation, but only for IPs
-		// that actually have flags — no point spending an API call on
-		// IPs with nothing suspicious detected.
 		llmResult := ExplainIP(ip, ipType, flags, techniques, intel)
+
+		// NEW in Phase 6: compute severity using everything gathered above.
+		severity := CalculateSeverity(flags, techniques, intel)
 
 		results = append(results, IPResult{
 			IP:         ip,
@@ -116,6 +117,7 @@ func ParseLog(content string) []IPResult {
 			Techniques: techniques,
 			Intel:      intel,
 			LLM:        llmResult,
+			Severity:   severity,
 		})
 	}
 

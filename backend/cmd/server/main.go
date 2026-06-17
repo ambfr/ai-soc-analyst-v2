@@ -2,8 +2,11 @@
 package main
 
 import (
+	"bufio"
 	"io"
 	"log"
+	"os"
+	"strings"
 
 	"ai-soc-analyst-v2/backend/internal/analyzer"
 
@@ -11,7 +14,38 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// loadEnvFile reads a simple KEY=VALUE .env file and sets each line as an
+// environment variable via os.Setenv. This is a deliberately minimal
+// implementation — no quoting, no comments, no multiline values — just
+// enough for API keys. If the file doesn't exist, it silently does nothing
+// rather than erroring, since env vars might be set another way instead
+// (e.g. on a deployed server like Render, which has its own env var UI).
+func loadEnvFile(path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		return // .env not found — that's fine, not an error
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue // skip blank lines and comments
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		os.Setenv(key, value)
+	}
+}
+
 func main() {
+	loadEnvFile(".env")
+
 	router := gin.Default()
 
 	router.Use(cors.New(cors.Config{
@@ -45,11 +79,6 @@ func analyzeHandler(c *gin.Context) {
 		return
 	}
 
-	// Open the uploaded file and read its full content into memory as a
-	// string. multipart.File satisfies io.Reader, so io.ReadAll works
-	// directly on it. For very large log files you'd eventually want to
-	// stream this instead, but for now reading fully into memory is simpler
-	// and fine for typical log sizes.
 	file, err := fileHeader.Open()
 	if err != nil {
 		c.JSON(500, gin.H{"error": "failed to open uploaded file: " + err.Error()})

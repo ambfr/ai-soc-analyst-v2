@@ -5,6 +5,7 @@
 *.so
 *.dylib
 backend/server
+.env
 
 # Test files created during development
 sample.log

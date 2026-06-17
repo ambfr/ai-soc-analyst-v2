@@ -9,14 +9,14 @@ import (
 
 var ipRegex = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
 
-// IPResult now includes Techniques — the MITRE ATT&CK mapping for whatever
-// flags this IP triggered. This is the only change to this struct in Phase 3.
+// IPResult now includes ThreatIntel — populated only for external IPs.
 type IPResult struct {
-	IP         string            `json:"ip"`
-	Type       string            `json:"type"`
-	Count      int               `json:"count"`
-	Flags      []string          `json:"flags"`
-	Techniques []MitreTechnique  `json:"mitre_techniques"`
+	IP         string           `json:"ip"`
+	Type       string           `json:"type"`
+	Count      int              `json:"count"`
+	Flags      []string         `json:"flags"`
+	Techniques []MitreTechnique `json:"mitre_techniques"`
+	Intel      ThreatIntel      `json:"threat_intel"`
 }
 
 type AnalyzeResult struct {
@@ -93,16 +93,26 @@ func ParseLog(content string) []IPResult {
 			flags = append(flags, "high_frequency")
 		}
 
-		// NEW in Phase 3: look up MITRE techniques for whatever flags this
-		// IP triggered. MapFlagsToTechniques lives in mitre.go.
 		techniques := MapFlagsToTechniques(flags)
+		ipType := classifyIP(ip)
+
+		// NEW in Phase 4: only call AbuseIPDB for external IPs. Checking
+		// internal/private IPs against a public abuse database makes no
+		// sense and would just waste API quota.
+		var intel ThreatIntel
+		if ipType == "external" {
+			intel = CheckIP(ip)
+		} else {
+			intel = ThreatIntel{Checked: false}
+		}
 
 		results = append(results, IPResult{
 			IP:         ip,
-			Type:       classifyIP(ip),
+			Type:       ipType,
 			Count:      occurrences[ip],
 			Flags:      flags,
 			Techniques: techniques,
+			Intel:      intel,
 		})
 	}
 

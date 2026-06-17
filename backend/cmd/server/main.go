@@ -2,6 +2,7 @@
 package main
 
 import (
+	"io"
 	"log"
 
 	"ai-soc-analyst-v2/backend/internal/analyzer"
@@ -44,11 +45,30 @@ func analyzeHandler(c *gin.Context) {
 		return
 	}
 
-	result, err := analyzer.PreviewFile(fileHeader)
+	// Open the uploaded file and read its full content into memory as a
+	// string. multipart.File satisfies io.Reader, so io.ReadAll works
+	// directly on it. For very large log files you'd eventually want to
+	// stream this instead, but for now reading fully into memory is simpler
+	// and fine for typical log sizes.
+	file, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(500, gin.H{"error": "failed to open uploaded file: " + err.Error()})
+		return
+	}
+	defer file.Close()
+
+	contentBytes, err := io.ReadAll(file)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "failed to read uploaded file: " + err.Error()})
 		return
 	}
 
-	c.JSON(200, result)
+	results := analyzer.ParseLog(string(contentBytes))
+
+	c.JSON(200, analyzer.AnalyzeResult{
+		Filename:  fileHeader.Filename,
+		SizeBytes: fileHeader.Size,
+		TotalIPs:  len(results),
+		Results:   results,
+	})
 }

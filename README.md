@@ -24,6 +24,17 @@ You upload a `.log` file containing network activity (failed logins, connection 
 
 There's also a **Live mode** — instead of waiting for the whole file to process, it streams results over a WebSocket and shows each detection as it happens, simulating a real-time monitoring feed.
 
+### Screenshots
+
+**Watchtower dashboard**
+![Dashboard overview](./screenshots/dashboard-overview.png)
+
+**Expanded alert detail — MITRE mapping, AI explanation, threat intel**
+![Expanded detail](./screenshots/expanded-detail.png)
+
+**Live mode — streaming results in real time**
+![Live mode](./screenshots/live-mode.png)
+
 ## Why I rebuilt it
 
 I originally built a version of this project (linked below) using Python, Streamlit, and a local GPT-2 model. It worked, but I wanted to push it further: a real frontend instead of Streamlit, real threat intelligence instead of just text generation, and a different tech stack than the other projects in my portfolio, so I rebuilt it from scratch using Go and SvelteKit instead of Python and React.

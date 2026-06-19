@@ -2,6 +2,9 @@
 	import { onDestroy } from 'svelte';
 	import Chart from 'chart.js/auto';
 
+	const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
+	const WS_BASE = API_BASE.replace('http', 'ws');
+
 	let file = null;
 	let loading = false;
 	let error = null;
@@ -53,7 +56,7 @@
 		formData.append('file', file);
 
 		try {
-			const response = await fetch('http://localhost:8080/analyze', {
+			const response = await fetch(`${API_BASE}/analyze`, {
 				method: 'POST',
 				body: formData
 			});
@@ -87,7 +90,7 @@
 		const content = await file.text();
 
 		try {
-			ws = new WebSocket('ws://localhost:8080/analyze/stream');
+			ws = new WebSocket(`${WS_BASE}/analyze/stream`);
 
 			ws.onopen = () => {
 				ws.send(content);

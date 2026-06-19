@@ -1,5 +1,5 @@
 <script>
-	import { onMount, onDestroy } from 'svelte';
+	import { onDestroy } from 'svelte';
 	import Chart from 'chart.js/auto';
 
 	let file = null;
@@ -7,27 +7,47 @@
 	let error = null;
 	let result = null;
 	let expandedIp = null;
+	let liveMode = false;
+	let ws = null;
+	let streaming = false;
 
 	let severityCanvas;
 	let trafficCanvas;
 	let severityChart = null;
 	let trafficChart = null;
 
+	let justSelected = false;
+
 	function handleFileChange(event) {
 		file = event.target.files[0];
 		error = null;
-	}
 
+		if (file) {
+			justSelected = true;
+			setTimeout(() => {
+				justSelected = false;
+			}, 500);
+		}
+	}
 	async function handleAnalyze() {
 		if (!file) {
 			error = 'Please choose a log file first.';
 			return;
 		}
 
-		loading = true;
 		error = null;
-		result = null;
 		expandedIp = null;
+
+		if (liveMode) {
+			await handleAnalyzeStreaming();
+		} else {
+			await handleAnalyzeBatch();
+		}
+	}
+
+	async function handleAnalyzeBatch() {
+		loading = true;
+		result = null;
 
 		const formData = new FormData();
 		formData.append('file', file);
@@ -44,15 +64,69 @@
 			}
 
 			result = await response.json();
-
-			// Charts need the canvas elements to exist in the DOM first, and
-			// Svelte updates the DOM asynchronously after `result` changes.
-			// requestAnimationFrame waits for the next paint, ensuring the
-			// {#if result} block has actually rendered before we try to draw.
 			requestAnimationFrame(renderCharts);
 		} catch (err) {
 			error = err.message;
 		} finally {
+			loading = false;
+		}
+	}
+
+	async function handleAnalyzeStreaming() {
+		// Reset to an empty result shape immediately — rows will be pushed
+		// into result.results one at a time as the WebSocket messages arrive.
+		result = {
+			filename: file.name,
+			size_bytes: file.size,
+			total_ips: 0,
+			results: []
+		};
+		streaming = true;
+		loading = true;
+
+		const content = await file.text();
+
+		try {
+			ws = new WebSocket('ws://localhost:8080/analyze/stream');
+
+			ws.onopen = () => {
+				ws.send(content);
+			};
+
+			ws.onmessage = (event) => {
+				const data = JSON.parse(event.data);
+
+				if (data.done) {
+					streaming = false;
+					loading = false;
+					ws.close();
+					return;
+				}
+
+				// data is a single IPResult. If we've already seen this IP
+				// (e.g. its flags/severity updated on a later line), replace
+				// it in place rather than adding a duplicate row.
+				const existingIndex = result.results.findIndex((r) => r.ip === data.ip);
+				if (existingIndex >= 0) {
+					result.results[existingIndex] = data;
+				} else {
+					result.results.push(data);
+				}
+				// Reassigning triggers Svelte's reactivity for array mutations.
+				result.results = result.results;
+				result.total_ips = result.results.length;
+
+				requestAnimationFrame(renderCharts);
+			};
+
+			ws.onerror = () => {
+				error = 'WebSocket connection failed. Is the backend running?';
+				streaming = false;
+				loading = false;
+			};
+		} catch (err) {
+			error = err.message;
+			streaming = false;
 			loading = false;
 		}
 	}
@@ -107,8 +181,6 @@
 	function renderCharts() {
 		if (!result || !severityCanvas || !trafficCanvas) return;
 
-		// Destroy any previous chart instances before redrawing — otherwise
-		// Chart.js throws "canvas already in use" errors on re-analysis.
 		destroyCharts();
 
 		severityChart = new Chart(severityCanvas, {
@@ -177,6 +249,7 @@
 
 	onDestroy(() => {
 		destroyCharts();
+		if (ws) ws.close();
 	});
 </script>
 
@@ -192,25 +265,40 @@
 		<p class="text-sm text-slate-400 mb-10">Upload a network log file to detect and explain suspicious activity.</p>
 
 		<div class="flex items-center gap-4 mb-8">
-			<label class="relative cursor-pointer">
-				<input
-					type="file"
-					accept=".log,.txt"
-					on:change={handleFileChange}
-					class="absolute inset-0 opacity-0 cursor-pointer"
-				/>
-				<span class="block bg-[#11151D] border-2 border-slate-200 text-slate-200 text-sm px-4 py-2.5 shadow-[3px_3px_0_0_#E8EBF0] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none transition-[transform,box-shadow] duration-75">
-					{file ? file.name : 'Choose log file'}
-				</span>
-			</label>
-			<button
-				on:click={handleAnalyze}
-				disabled={loading}
-				class="bg-blue-600 border-2 border-slate-200 text-white text-sm font-medium px-5 py-2.5 shadow-[3px_3px_0_0_#1d4ed8] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none disabled:opacity-40 disabled:cursor-not-allowed disabled:active:translate-x-0 disabled:active:translate-y-0 disabled:active:shadow-[3px_3px_0_0_#1d4ed8] transition-[transform,box-shadow] duration-75"
+		<label class="relative cursor-pointer">
+			<input
+				type="file"
+				accept=".log,.txt"
+				on:change={handleFileChange}
+				class="absolute inset-0 opacity-0 cursor-pointer"
+			/>
+			<span
+				class="block border-2 text-sm px-4 py-2.5 transition-[transform,box-shadow,background-color,border-color] duration-150 active:translate-x-[3px] active:translate-y-[3px] active:shadow-none
+				{justSelected
+					? 'bg-emerald-950 border-emerald-400 text-emerald-300 shadow-[3px_3px_0_0_#065F46]'
+					: 'bg-[#11151D] border-slate-200 text-slate-200 shadow-[3px_3px_0_0_#E8EBF0]'}"
 			>
-				{loading ? 'Analyzing…' : 'Analyze'}
-			</button>
-		</div>
+				{file ? file.name : 'Choose log file'}
+			</span>
+		</label>
+		<button
+			on:click={handleAnalyze}
+			disabled={loading}
+			class="bg-blue-600 border-2 border-slate-200 text-white text-sm font-medium px-5 py-2.5 shadow-[3px_3px_0_0_#1d4ed8] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none disabled:opacity-40 disabled:cursor-not-allowed disabled:active:translate-x-0 disabled:active:translate-y-0 disabled:active:shadow-[3px_3px_0_0_#1d4ed8] transition-[transform,box-shadow] duration-75"
+		>
+			{loading ? (streaming ? 'Streaming…' : 'Analyzing…') : 'Analyze'}
+		</button>
+		<button
+			on:click={() => (liveMode = !liveMode)}
+			class="flex items-center gap-2 border-2 text-sm font-medium px-4 py-2.5 transition-[transform,box-shadow] duration-75 active:translate-x-[2px] active:translate-y-[2px] active:shadow-none
+			{liveMode
+				? 'bg-emerald-950 border-emerald-400 text-emerald-400 shadow-[3px_3px_0_0_#065F46]'
+				: 'bg-[#11151D] border-slate-600 text-slate-400 shadow-[3px_3px_0_0_#1C2230]'}"
+		>
+			<span class="w-1.5 h-1.5 rounded-full {liveMode ? 'bg-emerald-400' : 'bg-slate-600'}"></span>
+			live mode
+		</button>
+	</div>
 
 		{#if error}
 			<div class="bg-red-950 border border-red-900 text-red-400 text-sm px-4 py-3 rounded-lg mb-8">

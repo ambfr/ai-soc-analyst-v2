@@ -5,25 +5,22 @@ import (
 	"bufio"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"ai-soc-analyst-v2/backend/internal/analyzer"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
-// loadEnvFile reads a simple KEY=VALUE .env file and sets each line as an
-// environment variable via os.Setenv. This is a deliberately minimal
-// implementation — no quoting, no comments, no multiline values — just
-// enough for API keys. If the file doesn't exist, it silently does nothing
-// rather than erroring, since env vars might be set another way instead
-// (e.g. on a deployed server like Render, which has its own env var UI).
 func loadEnvFile(path string) {
 	file, err := os.Open(path)
 	if err != nil {
-		return // .env not found — that's fine, not an error
+		return
 	}
 	defer file.Close()
 
@@ -31,7 +28,7 @@ func loadEnvFile(path string) {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue // skip blank lines and comments
+			continue
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
@@ -41,6 +38,15 @@ func loadEnvFile(path string) {
 		value := strings.TrimSpace(parts[1])
 		os.Setenv(key, value)
 	}
+}
+
+// upgrader configures the WebSocket upgrade. CheckOrigin is set permissive
+// here (allow all) since this is a local dev / portfolio project, not a
+// production service handling untrusted origins.
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
 func main() {
@@ -56,6 +62,7 @@ func main() {
 	}))
 
 	router.POST("/analyze", analyzeHandler)
+	router.GET("/analyze/stream", streamHandler)
 
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
@@ -100,4 +107,35 @@ func analyzeHandler(c *gin.Context) {
 		TotalIPs:  len(results),
 		Results:   results,
 	})
+}
+// streamHandler upgrades the connection to a WebSocket, expects the client
+// to send the raw log file content as the first text message, then streams
+// IPResult updates back as they're computed.
+func streamHandler(c *gin.Context) {
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		log.Println("websocket upgrade failed:", err)
+		return
+	}
+	defer conn.Close()
+
+	// Wait for the client to send the log content as the first message.
+	_, message, err := conn.ReadMessage()
+	if err != nil {
+		log.Println("websocket read failed:", err)
+		return
+	}
+
+	content := string(message)
+
+	// 300ms per line gives a visible "streaming in" effect without making
+	// a large log file take forever. Tune this if your demo log is huge.
+	analyzer.ParseLogStreaming(content, 300*time.Millisecond, func(result analyzer.IPResult) {
+		if err := conn.WriteJSON(result); err != nil {
+			log.Println("websocket write failed:", err)
+		}
+	})
+
+	// Send a final "done" sentinel so the frontend knows the stream finished.
+	conn.WriteJSON(gin.H{"done": true})
 }

@@ -1,9 +1,17 @@
 <script>
+	import { onMount, onDestroy } from 'svelte';
+	import Chart from 'chart.js/auto';
+
 	let file = null;
 	let loading = false;
 	let error = null;
 	let result = null;
 	let expandedIp = null;
+
+	let severityCanvas;
+	let trafficCanvas;
+	let severityChart = null;
+	let trafficChart = null;
 
 	function handleFileChange(event) {
 		file = event.target.files[0];
@@ -36,6 +44,12 @@
 			}
 
 			result = await response.json();
+
+			// Charts need the canvas elements to exist in the DOM first, and
+			// Svelte updates the DOM asynchronously after `result` changes.
+			// requestAnimationFrame waits for the next paint, ensuring the
+			// {#if result} block has actually rendered before we try to draw.
+			requestAnimationFrame(renderCharts);
 		} catch (err) {
 			error = err.message;
 		} finally {
@@ -72,9 +86,98 @@
 				critical: result.results.filter((r) => r.severity === 'critical').length,
 				high: result.results.filter((r) => r.severity === 'high').length,
 				medium: result.results.filter((r) => r.severity === 'medium').length,
-				external: result.results.filter((r) => r.type === 'external').length
+				low: result.results.filter((r) => r.severity === 'low').length,
+				none: result.results.filter((r) => r.severity === 'none').length,
+				external: result.results.filter((r) => r.type === 'external').length,
+				internal: result.results.filter((r) => r.type === 'internal').length
 			}
 		: null;
+
+	function destroyCharts() {
+		if (severityChart) {
+			severityChart.destroy();
+			severityChart = null;
+		}
+		if (trafficChart) {
+			trafficChart.destroy();
+			trafficChart = null;
+		}
+	}
+
+	function renderCharts() {
+		if (!result || !severityCanvas || !trafficCanvas) return;
+
+		// Destroy any previous chart instances before redrawing — otherwise
+		// Chart.js throws "canvas already in use" errors on re-analysis.
+		destroyCharts();
+
+		severityChart = new Chart(severityCanvas, {
+			type: 'bar',
+			data: {
+				labels: ['critical', 'high', 'medium', 'low', 'none'],
+				datasets: [
+					{
+						data: [
+							severityCounts.critical,
+							severityCounts.high,
+							severityCounts.medium,
+							severityCounts.low,
+							severityCounts.none
+						],
+						backgroundColor: ['#EF4444', '#F97316', '#FBBF24', '#3B82F6', '#475569'],
+						borderRadius: 3,
+						barThickness: 28
+					}
+				]
+			},
+			options: {
+				responsive: true,
+				maintainAspectRatio: false,
+				plugins: { legend: { display: false } },
+				scales: {
+					x: {
+						ticks: { color: '#8B96A8', font: { size: 11, family: 'IBM Plex Mono' } },
+						grid: { display: false }
+					},
+					y: {
+						ticks: { color: '#5B6577', stepSize: 1, font: { size: 11 } },
+						grid: { color: '#1C2230' },
+						beginAtZero: true
+					}
+				}
+			}
+		});
+
+		trafficChart = new Chart(trafficCanvas, {
+			type: 'doughnut',
+			data: {
+				labels: ['external', 'internal'],
+				datasets: [
+					{
+						data: [severityCounts.external, severityCounts.internal],
+						backgroundColor: ['#3B82F6', '#475569'],
+						borderColor: '#0B0E14',
+						borderWidth: 3
+					}
+				]
+			},
+			options: {
+				responsive: true,
+				maintainAspectRatio: false,
+				cutout: '65%',
+				plugins: {
+					legend: {
+						position: 'bottom',
+						labels: { color: '#8B96A8', font: { size: 11 }, boxWidth: 10, padding: 12 }
+					}
+				}
+			}
+		});
+	}
+
+	onDestroy(() => {
+		destroyCharts();
+	});
 </script>
 
 <div
@@ -87,6 +190,7 @@
 			<span class="text-xs text-slate-500 uppercase tracking-wider">AI-powered SOC log analysis</span>
 		</div>
 		<p class="text-sm text-slate-400 mb-10">Upload a network log file to detect and explain suspicious activity.</p>
+
 		<div class="flex items-center gap-4 mb-8">
 			<label class="relative cursor-pointer">
 				<input
@@ -137,6 +241,21 @@
 				<div class="bg-[#11151D] border border-[#1C2230] rounded-lg px-3.5 py-2.5">
 					<div class="text-[11px] text-slate-500 mb-1">external</div>
 					<div class="font-mono text-xl text-slate-100">{severityCounts.external}</div>
+				</div>
+			</div>
+
+			<div class="grid grid-cols-2 gap-2.5 mb-6">
+				<div class="bg-[#11151D] border border-[#1C2230] rounded-lg p-4">
+					<div class="text-[11px] text-slate-500 mb-3">severity distribution</div>
+					<div class="h-44">
+						<canvas bind:this={severityCanvas}></canvas>
+					</div>
+				</div>
+				<div class="bg-[#11151D] border border-[#1C2230] rounded-lg p-4">
+					<div class="text-[11px] text-slate-500 mb-3">traffic split</div>
+					<div class="h-44">
+						<canvas bind:this={trafficCanvas}></canvas>
+					</div>
 				</div>
 			</div>
 
